@@ -1,12 +1,10 @@
 ---
-title: "Final Project"
+title: "STA 141 Final Project"
 author: "Sai Suresh"
 date: "5/3/2023"
 output: 
   html_document:
     toc: true
-    toc_float: true
-
 ---
 
 ```{r setup, include=FALSE}
@@ -21,28 +19,28 @@ suppressWarnings(library(knitr))
 
 # Abstract
 
-In this project, we developed a model using the data from the Steinmetz et al. (2019) study to predict the trial outcome. Through exploration of the data set, we identified the `Trial`, `Mouse`, `Contrast Left` and `Contrast Right` interaction, `Average Spikes`, and `Average Root Spikes` to be the best predictors to use based on their apparent correlation with trial success (feedback = 1). Using these predictors and split-sample validation, we trained LDA, Logistic Regression, kNN, and Random Forest models to predict trial outcome. We evaluated these models based on three criteria: their accuracy rate misclassification rate, and F1 score. The accuracy rate represents the proportion of trials for which the model correctly predicted the feedback type. Conversely, the misclassfication rate is the proportion of trials for which the model incorrectly classified the feedback type. Lastly, the F1 score considers both false positives and false negatives to return a balanced evaluation of a model's classifications. By these three criteria, the best performing model was the Random Forest model, with an accuracy of about 75% and a F1 score of 0.84. 
+In this project, we developed a model using the data from the Steinmetz et al. (2019) study to predict the trial outcome. Through exploration of the data set, we identified the `Trial`, `Mouse`, `Contrast Left` and `Contrast Right` interaction, `Average Spikes`, and `Average Root Spikes` to be the best predictors to use based on their apparent correlation with trial success (feedback = 1). Using these predictors and split-sample validation, we trained LDA, Logistic Regression, kNN, and Random Forest models to predict trial outcome. We evaluated these models based on three criteria: their accuracy rate misclassification rate, and F1 score. The accuracy rate represents the proportion of trials for which the model correctly predicted the feedback type. Conversely, the misclassfication rate is the proportion of trials for which the model incorrectly classified the feedback type. Lastly, the F1 score considers both false positives and false negatives to return a balanced evaluation of a model's classifications. By these three criteria, the best performing model was the Random Forest model which included and interaction term between the contrasts and excluded the average spike count from the `root` brain area. 
 
 # Introduction
 
 In this project, we will look at the data from the Steinmetz et al. (2019) study. In this study, the researchers presented visual stimuli to 10 different mice in 39 different sessions and had the mice make a decision using a wheel they could control with their feet. 
 
-Based on the decision of the mouse, the researchers would provide either a reward or a penalty. The visual stimuli varied in terms of contrast levels (0, 0.25, 0.5, or 1) and direction (left or right). A successful trial is categorized by the mouse:
+Based on the decision of the mouse, the researchers would provide either a reward or a penalty. The visual stimuli varied in terms of contrast levels (0, 0.25, 0.5, or 1) and direction (left or right) recorded in the `contrast_left` and `contrast_right` variables. A successful trial is categorized by the mouse:
 
   - Turning the wheel to the right when the left contrast > right contrast
   - Turning the wheel to the left when the right contrast > left contrast
   - Holding the wheel still when left contrast and right contrast are 0
   - Random when left contrast = right contrast and non-zero
   
-For each trial in each session, the feedback of the trial was recorded as a 1 if successful, and as -1 otherwise. Additionally, neuron activity of the mice was recorded in the form of spike trains, which captures a neuron firing at a certain time point in the 40 time bins recorded. If a neuron fired, a 1 in the respective time bin was recorded, and a 0 otherwise. 
+For each trial in each session, the feedback of the trial was recorded as a 1 if successful, and as -1 otherwise in the `feedback_type` column. Additionally, neuron activity of the mice was recorded in the form of spike trains, which captures a neuron firing at a certain time point in the 40 time bins recorded in `time`, which can be observed by the `spks` variable. If a neuron fired, a 1 in the respective time bin was recorded, and a 0 otherwise for each trial. 
 
-For this project, we will be focusing on session 1 to 18, which correspond to four mice: Cori, Frossman, Hence, and Lederberg. With this data, we will attempt to build a model that will be able to predict the outcome of a trial based on the available data. To accomplish this, we will first be exploring the data to find potential predictors and patterns within the sessions. Then, after identifying the variables we deem to be important, we will integrate the data across sessions and then develop and evaluate predictive models. 
+For this project, we will be focusing on session 1 to 18, which correspond to four mice: Cori, Frossman, Hence, and Lederberg. With this data, we will attempt to build a model that will be able to predict the outcome of a trial based on the available data. To accomplish this, we will first be exploring the data to find potential predictors and patterns within the sessions. Then, after identifying the variables we deem to be important, we will integrate the data across sessions and then develop and evaluate predictive models. Finally, we will use an additional test set we have not seen before to evaluate the performance of our optimal model.
 
 
 # Exploratory Data Analysis
 
 ```{r, echo=FALSE}
-
+setwd("~/College Semesters/Spring 2023/STA 141A/Project/") # set working directory
 # Load in data
 sessions=list()
 
@@ -68,7 +66,7 @@ for (i in 1:18) {
   # round success rate to 3 significant digits
   success_rate = format(round(success_rate, digits=3)) %>% as.numeric()
   
-  # add row
+  # add row, acknowledgements 5
   data <- data %>% add_row(Session=i, Mouse=mouse_name, N.Trials=num_trials, N.Neurons=num_neurons, 
                Success.Rate=success_rate, Brain.Areas=brain_areas)
 }
@@ -112,7 +110,7 @@ for (i in 1:18){
     }
   }
 }
-brain.areas <- sort(brain.areas) # sort alphabetically 
+brain.areas <- sort(brain.areas) # sort alphabetically, acknowledgements 7
 
 # summed spike matrix for each session
 sum.session.spikes <- function(sid) {
@@ -142,7 +140,7 @@ for (i in 1:18){
     count = sum.spikes[ba.index] %>% sum()
     avg.count = count/length(sum.spikes)
     sessions.brain.areas.counts <- sessions.brain.areas.counts %>% 
-      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Avg.Count=avg.count)
+      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Avg.Count=avg.count) # acknowledgements 5
   }
 }
 
@@ -151,8 +149,8 @@ for (i in 1:18){
 sessions.brain.areas.counts %>% ggplot() +
   geom_col(mapping=aes(x=Brain.Area, y=Avg.Count, fill=factor(Brain.Area))) +
   facet_wrap(facets=vars(Mouse)) +
-  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
-  scale_y_continuous(guide=guide_axis(n.dodge = 1)) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) + # acknowledgements 6
+  scale_y_continuous(guide=guide_axis(n.dodge = 1)) + # acknowledgements 6
   coord_flip() +
   ggtitle(label="Brain Area Distribution for Each Mouse", subtitle="Figure 2")
 ```
@@ -177,15 +175,15 @@ for (i in 1:18){
     ba.index = which(sessions[[i]]$brain_area == ba)
     count = ba.index %>% length() # how many spikes from each area observed
     sessions.brain.areas.obs <- sessions.brain.areas.obs %>% 
-      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Count=count)
+      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Count=count) # acknowledgements 5
   }
 }
 
 
 sessions.brain.areas.obs %>% ggplot() +
   geom_col(mapping=aes(x=Brain.Area, y=Count, fill=factor(Session))) +
-  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
-  scale_y_continuous(guide=guide_axis(n.dodge = 1)) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) + # acknowledgements 6
+  scale_y_continuous(guide=guide_axis(n.dodge = 1)) + # acknowledgements 6
   coord_flip() +
   ggtitle(label="Brain Area Distribution Across Sessions", subtitle="Figure 3")
 ```
@@ -208,7 +206,7 @@ for (i in c(2, 6, 9, 17)) {
   for (j in 1:nrow(sessions[[i]]$feedback_type)) {
     fb = sessions[[i]]$feedback_type[j]
 
-    # add row to tibble
+    # add row to tibble, acknowledgements 5
     sessions.summary <- sessions.summary %>% add_row(Session=i, Trial=j, Mouse=mouse, `Feedback`=fb)
   }
 }
@@ -249,6 +247,7 @@ for (i in 1:nrow(sessions.summary)){
   sessions.summary$Con.Right[i] <- con.right
 }
 
+# acknowledgements 2
 # plot
 sessions.summary %>% ggplot() + 
   geom_point(aes(x=Con.Left, y=Con.Right, color=factor(Session)), position="jitter") +
@@ -312,7 +311,7 @@ print(" Observed Brain Areas:")
 brain.areas
 
 # add columns corresponding to the counts of average spikes for these areas
-sessions.summary[,brain.areas] = NA #(acknowledgements #14.)
+sessions.summary[,brain.areas] = NA # acknowledgements 8
 for (i in 1:nrow(sessions.summary)) {
   s.i = sessions.summary[i,]$Session
   t.i = sessions.summary[i,]$Trial
@@ -373,8 +372,8 @@ for (i in 1:18) {
 ```
 
 ```{r, echo=FALSE}
-s4.ba <- sessions[[4]]$brain_area %>% unique() %>% sort()
-s16.ba <- sessions[[16]]$brain_area %>% unique() %>% sort()
+s4.ba <- sessions[[4]]$brain_area %>% unique() %>% sort() # acknowledgements 7
+s16.ba <- sessions[[16]]$brain_area %>% unique() %>% sort() # acknowledgements 7
 cat("Session 4 observed brain areas:", s4.ba, "\n")
 cat("Session 16 observed brain areas:", s16.ba, "\n")
 ```
@@ -392,7 +391,7 @@ for (i in 1:n.trial) {
   lgd.counts = summed.spks[lgd.index] %>% sum()
   avg.lgd = lgd.counts / sessions[[4]]$spks[[i]] %>% nrow()
   
-  # add row
+  # add row, acknowledgements 5
   session.4 <- session.4 %>% add_row(Trial=i, Feedback=fb, Avg.LGd=avg.lgd)
 }
 head(session.4)
@@ -417,7 +416,7 @@ for (i in 1:n.trial) {
   lgd.counts = summed.spks[lgd.index] %>% sum()
   avg.lgd = lgd.counts / sessions[[16]]$spks[[i]] %>% nrow()
   
-  # add row
+  # add row, acknowledgements 5
   session.16 <- session.16 %>% add_row(Trial=i, Feedback=fb, Avg.LGd=avg.lgd)
 }
 head(session.16)
@@ -448,7 +447,7 @@ for (i in 1:nrow(sessions.summary)){
   
   # sum spike matrix, find max spike and its associated brain area
   summed.spks = apply(sessions[[s.i]]$spks[[t.i]], 1, sum)
-  max.spk.index = which.max(summed.spks)
+  max.spk.index = which.max(summed.spks) # acknowledgements 4
   ma.ba = sessions[[s.i]]$brain_area[max.spk.index]
   
   # add to tibble
@@ -488,7 +487,7 @@ for (i in 1:nrow(sessions.summary)){
   
   # sum spike matrix, find max spike and its associated brain area
   summed.spks = apply(sessions[[s.i]]$spks[[t.i]], 1, sum)
-  max.spk.index = which.max(summed.spks)
+  max.spk.index = which.max(summed.spks) # acknowledgements 4
   max.spk = summed.spks[max.spk.index]
   
   # add to tibble
@@ -542,9 +541,9 @@ for(i in 1:18){
     summed.spk.matrix = apply(sessions[[sid]]$spks[[tid]], 1, sum)
     total.spks = sum(summed.spk.matrix)
     avg.spks = total.spks / spikes.nrows
-    max.spk = summed.spk.matrix[which.max(summed.spk.matrix)]
+    max.spk = summed.spk.matrix[which.max(summed.spk.matrix)] # acknowledgements 4
 
-    # add row 
+    # add row, acknowledgements 5
     session.trial.summary <- session.trial.summary %>% 
       add_row(Session=sid, Trial=tid, Mouse=mouse, Con.L=con.left,Con.R=con.right, Feedback=fb, 
               Avg.Spikes=avg.spks, Max.Spike=max.spk)
@@ -555,10 +554,13 @@ for(i in 1:18){
 head(session.trial.summary)
 ```
 
+# Building the Model
+
+Now that I have integrated the relevant information across all sessions and trials into one data table, I can begin building and evaluating prediction models. In this section, I will build a variety of different models and compare their performances to decide upon the optimal model for predicting trial outcome. First, I will split my data into a training and testing sets so that I am able to avoid over-fitting my models and evaluate their prediction accuracy against the test set. 
 
 ## Split-Sample Preparation
 
-I will split my integrated data set into a training and testing set so that I can build and evaluate the performance of my prediction models later. Before splitting my data, I first changed the `Feedback` column into a factor with levels 0 and 1, for unsuccessful and successful trials, respectively. Then, I also scaled my data so that it is normalized. 
+I will split my integrated data set into a training and testing set so that I can build and evaluate the performance of my prediction models. Before splitting my data, I first changed the `Feedback` column into a factor with levels 0 and 1, for unsuccessful and successful trials, respectively. Then, I also scaled my data so that it is normalized. 
 
 ```{r, echo=FALSE}
 # feedback as factor with levels 0/1
@@ -583,26 +585,29 @@ print("Testing Set:")
 head(test.data)
 ```
 
-Now that my data has been integrated across all sessions and trials, I will begin building and evaluating models based on their ability to accurately predict the trial outcomes. Before I do this, I will first define a benchmark model against which I can compare my other models against to ensure they have improved their accuracy in making trial outcome predictions. However, before I can begin building any models, I need to determine the criteria by which I will be evaluating their performance. 
+Now that my data has been integrated across all sessions and trials, I will begin building and evaluating models based on their ability to accurately predict the trial outcomes. I will be evaluating the performance of various models based on three model metrics described below, which will then allow me to compare the performance of all the models and help me select the best one. 
 
 ## Model Metrics
 
 The metrics I will use to evaluate the performance of my model are:
 
 1. Accuracy Rate: the percentage of trials in which the model correctly predicts the feedback type of the trial
+
 2. Misclassification Rate: the percentage of trials in which the model incorrectly classifies a trial's outcome.
+
 3. F-1 Score: considers the false positives and false negatives by combining the precision and recall rates 
   - Precision: the proportion of cases correctly classified as positive out of all cases predicted as positive
   - Recall: the proportion of cases correctly classified as positive out of all actual positive cases
     
 
 ```{r, echo=FALSE}
-# code adapted from acknowledgements 15
+
+# acknowledgements 14
 
 # accuracy rate
 accuracy.rate <- function(confusion.matrix){
   correct = confusion.matrix["0","0"] + confusion.matrix["1","1"] # sum correctly classified
-  acc = (correct / sum(confusion.matrix)) * 100 # divide by total
+  acc = (correct / sum(confusion.matrix)) * 100  # divide by total
   return(acc)
 }
 
@@ -624,7 +629,7 @@ F1 <- function(confusion.matrix){
   act.pos = sum(confusion.matrix[,"1"])
   recall = true.pos / act.pos
   
-  f1 = 2 * precision * recall / (precision + recall) 
+  f1 = 2 * precision * recall / (precision + recall)
   
   return(f1)
 }
@@ -636,18 +641,24 @@ model.sum <- tibble("Model"=as.character(), "Accuracy"=as.numeric(), "Misclassfi
 
 ```
 
+Now that I have defined the measurements by which I will be evaluating the performance of the predictive models, I will define a benchmark model against which I can compare my other models against to ensure they have improved their accuracy in making trial outcome predictions.
+
 ## Benchmark Models
 
-For the benchmark models, I will only be using only the trial number as a predictor as this was a variable given to us in the data set.  
+For the benchmark models, I will only be using only the trial number as a predictor as this was a variable given to us in the data set. I decided on using a LDA model and a Random Forest model for my two benchmark models as they are two different classification methods with different levels of complexity. LDA looks at linear combinations to classify the data whereas Random Forest uses multiple decision trees to classify the data, making it more intensive than LDA. By including a more simple LDA model and a more complex Random Forest model for my benchmark models, I am able to better assess whether my choice of additional predictors actually improves the classification ability of the models. 
+
+As I build my models, I will be inputting the results of the evaluation criteria mentioned above into a summary table, which I will then use to decide upon the optimal predictive model. For each model I will print the accuracy rate just to get a quick idea of how the model performs. The other evaluation criteria will be viewable in the summary table of all fitted models. 
 
 ### Benchmark - LDA
 
 ```{r, echo=FALSE}
+
+# acknowledgements 1
 suppressWarnings(library(MASS))
 
 benchmark.lda <- lda(formula=Feedback ~ Trial, data=train.data)
 
-# predict
+# predict, acknowledgements 3
 bm.predict.lda <- predict(benchmark.lda, test.data, type="response")
 
 # confusion matrix
@@ -659,20 +670,21 @@ acc = accuracy.rate(cm)
 me = misclass.rate(cm)
 f1 = F1(cm)
 print("Benchmark LDA:")
-cat("Accuracy:", acc, "Misclassification Rate:", me)
+cat("Accuracy:", acc)
 
-# add to summary table
+# add to summary table,  acknowledgements 5
 model.sum <- model.sum %>% add_row(Model="Benchmark LDA", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
 ```
 
 ### Benchmark Random Forest
 
 ```{r, echo=FALSE}
+# acknowledgements 7
 suppressWarnings(library(randomForest))
 
-bm.rf <- randomForest(Feedback ~ Trial , data=train.data, importance=TRUE)
+bm.rf <- randomForest(Feedback ~ Trial, data=train.data, importance=TRUE)
 
-# predict
+# predict, acknowledgements 3
 bm.predict.rf <- predict(bm.rf, newdata=test.data, type="response")
 
 # confusion matrix
@@ -684,24 +696,27 @@ me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
 print("Benchmark Random Forest:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
+# add to summary table, acknowledgements 5
 model.sum <- model.sum %>% add_row(Model="Benchmark Random Forest", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 ```
 
-With the benchmark models defined, I can create models with additional predictors, evaluate their performance, and compare them to the benchmark model. The first model I tried to fit to the data was a Linear Discriminant Analysis model.
+With the benchmark models defined, I can create models with the additional predictors: `Session`, `Trial`, `Mouse`, `Con.L`, `Con.R`, `Avg.Spikes`, `Max.Spike`, and the interaction term of `Con.L*Con.R`.
+
+I then evaluate their performance, and compare them to the benchmark model. The first model I fit to the data was a Linear Discriminant Analysis model.
 
 ## Linear Discriminant Analysis Model - Without Average Root Spike Count
 
 ```{r, echo=FALSE}
+# acknowledgements 1
 
 # train model
-mod.lda <- lda(formula=Feedback ~. +Con.L:Con.R, data=train.data)
+mod.lda <- lda(formula=Feedback ~., data=train.data)
 #mod.lda
 
-# predict
+# predict, acknowledgements 3
 predict.lda <- predict(mod.lda, test.data)
 
 # confusion matrix
@@ -712,14 +727,15 @@ cm <- table(predict.lda$class, test.data$Feedback) # confusion matrix
 acc = accuracy.rate(cm)
 me = misclass.rate(cm)
 f1 = F1(cm)
-print("LDA without Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+print("LDA without Interaction or Root Spike:")
+cat("Model Accuracy:", acc)
 
-# add to summary table
-model.sum <- model.sum %>% add_row(Model="LDA, no root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+# add to summary table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="LDA, no interaction or root", 
+                                   Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
 ```
 
-In the LDA model above, I used the `Mouse`, `Trial`, `Avg.Spikes`, and the interaction term `Contrast Left`:`Contrast Right` in my model based on the visualizations comparing these values between the successful and unsuccessful trials above. 
+In the LDA model above, I used the `Mouse`, `Trial`, `Avg.Spikes`, `Con.L`, and `Con.R` predictors in my model based on the visualizations comparing these values between the successful and unsuccessful trials above. I found that omitting the `Con.L:Con.R` interaction term actually increased my model's accuracy, so I left it out. 
 
 Next, I want to see if a logistical regression model may produce a more accurate model, so I will fit and evaluate one next.
 
@@ -727,10 +743,10 @@ Next, I want to see if a logistical regression model may produce a more accurate
 
 ```{r, echo=FALSE}
 # train model
-mod.logr <- glm(formula=Feedback~ . +Con.R:Con.L, family="binomial", data=train.data)
+mod.logr <- glm(formula=Feedback~ ., family="binomial", data=train.data)
 #summary(mod.logr)
 
-# predict
+# predict, acknowledgements 3
 predict.logr <- predict(mod.logr, newdata=test.data, type="response")
 predict.logr <- ifelse(predict.logr > 0.5, 1, 0)
 
@@ -742,25 +758,26 @@ cm <- table(predict.logr, test.data$Feedback)
 me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
-print("Logistic Regression without Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+print("Logistic Regression without Interaction or Root Spike:")
+cat("Model Accuracy:", acc)
 
-# add to summary table
-model.sum <- model.sum %>% add_row(Model="Logistic Regression, no root", Accuracy=acc,
+# add to summary table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="Logistic Regression, no interaction or root", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 ```
 
-I built a logistical regression model using `Mouse`, `Trial`, `Avg.Spikes`, and the interaction term `Contrast Left`:`Contrast Right` as the predictors. 
+I built a logistical regression model using `Session`, `Mouse`, `Trial`, `Avg.Spikes`,`Max.Spike`, and the `Con.L` and `Con.R` variables as predictors. Here also, I found that omitting the `Con.L:Con.R` interaction term produced a more accurate model, so I dropped this term from the model. 
 
 This model has an accuracy a misclassification rate of very similar to that of the LDA model. Next, I want to try a k Nearest Neighbors (kNN) classification model to see if this is better at predicting the trial outcome.
 
 ## kNN Model - Without Average Root Spike Count
 
-Before fitting my kNN model, I first found the optimal k. Since I will use this later in a different kNN model, I will wrap the code into a function.
+Before fitting my kNN model, I first found the optimal k using a cross-validation approach of fitting various values of k and choosing the one that minimized the misclassifaction rate.
 
 ```{r, echo=FALSE}
 suppressWarnings(library(class))
-# find optimal k
+
+# find optimal k function, acknowledgements 12
 optimal.knn.k <- function(train.data, test.data){
   mes = c()
   for (i in 1:60){
@@ -775,7 +792,7 @@ optimal.knn.k <- function(train.data, test.data){
     ggtitle("Misclassification Rate for Various Values of k")
   
   opt.k = which.min(mes)
-  return(list(opt.k, pl))
+  return(list(opt.k, pl)) #acknowledgements 13
 }
 ```
 
@@ -785,7 +802,7 @@ optimal.knn.k <- function(train.data, test.data){
 # get plot optimal k test and get optimal k
 opt.k = optimal.knn.k(train.data, test.data)
 opt.k[[2]] # plot
-opt.k[[1]] # optimal k value
+cat("Optimal k:", opt.k[[1]], "\n") # optimal k value
 
 mod.knn <- knn(train=train.data[-c(3,6)], test=test.data[-c(3,6)], cl=train.data$Feedback, k=opt.k[[1]])
 
@@ -798,20 +815,24 @@ me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
 print("kNN without Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
+# add to summary table, acknowledgements 5
 model.sum <- model.sum %>% add_row(Model="kNN, no root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
 
 ```
 
+In order to fit the kNN model, I omitted the `Mouse` and `Feedback` columns of the training and testing sets as the `Mouse` variable was not a factor and the `Feedback` is what we are predicting. I also did not use the interaction term `Con.L:Con.R` for this model. 
+
+The kNN model appears to perform better than the LDA and Logistic Regression models. I will also fit a Random Forest model to see if this provides an even greater accuracy rate. 
+
 ## Random Forest Without Average Root Spike Count
 
 ```{r}
+# acknowledgements 9
+rf.mod <- randomForest(Feedback ~. +Con.L*Con.R, data=train.data, importance=TRUE)
 
-rf.mod <- randomForest(Feedback ~. +Con.L:Con.R, data=train.data, importance=TRUE)
-
-# predict
+# predict, acknowledgements 3
 predict.rf <- predict(rf.mod, newdata=test.data, type="response")
 
 # confusion matrix
@@ -822,18 +843,23 @@ cm <- table(predict.rf, test.data$Feedback)
 me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
-print("Random Forest, with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+print("Random Forest, without Root Spike:")
+cat("Model Accuracy:", acc)
 
-# add to summary table
-model.sum <- model.sum %>% add_row(Model="Random Forest, without root", Accuracy=acc,
+# add to summary table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="Random Forest, with interaction, without root", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 ```
 
+For the Random Forest model, I found that the accuracy was improved with the addition of the `Con.L:Con.R` interaction term, so I included it in this model. 
 
-Since the above three models produce predictions with similar accuracy rates, I wanted to try adding another predictor. The predictor I thought may help improve my model's accuracy is the average count of spikes coming from the `root` brain area as I observed this was a brain area observed in all sessions, excluding sessions 4 and 16, and that there was a slight difference between the negative and positive feedback types in the four summary sessions I focused on in the data exploration section. 
+```{r, echo=FALSE}
+model.sum
+```
 
-Therefore, I will add a column to my `session.trial.summary` data table which corresponds to the average spike count from the `root` brain area from each trial. Then, I will remove the NAs that will arise from sessions 4 and 16 and scale the data, split it into the training and testing sets, and then refit and evaluate the resulting models.
+Looking at the model metrics for all the models we have fitted so far, it appears that the Random Forest model has the best performance.However, I want to try re-fitting all of these models with an additional predictor of `Avg.Root` which represents the average spike activity from the `root` brain area. In the data exploration section, I observed a slight difference between the negative and positive feedback types in the four summary sessions, thus, it may help improve the accuracy of the models. I observed this was a brain area observed in all sessions except for 4 and 16, so I will have to omit the data from these sessions. 
+
+To include the `Avg.Root` spike count in my models, I will add a column to my data table which corresponds to the average spike count from the `root` brain area from each trial. Then, I will remove the NAs that will arise from sessions 4 and 16, scale the data, split it into the training and testing sets, and then re-fit and evaluate the resulting models.
 
 ```{r, echo=FALSE}
 
@@ -843,12 +869,14 @@ summed.trial.spks <- function(sid, tid) {
   return(summed.spks)
 }
 
-# add column
-session.trial.summary$Avg.Root <- rep(0, nrow(session.trial.summary))
+# new table with avg root
+# add column, acknowledgements 8
+session.trial.summary.root <- session.trial.summary
+session.trial.summary.root$Avg.Root <- rep(0, nrow(session.trial.summary.root))
 
-for(i in 1:nrow(session.trial.summary)){
-  sid = session.trial.summary[i,]$Session
-  tid = session.trial.summary[i,]$Trial
+for(i in 1:nrow(session.trial.summary.root)){
+  sid = session.trial.summary.root[i,]$Session
+  tid = session.trial.summary.root[i,]$Trial
   root.index = which(sessions[[sid]]$brain_area == "root")
   if(length(root.index) == 0) {
     avg.root = NA
@@ -858,49 +886,49 @@ for(i in 1:nrow(session.trial.summary)){
   avg.root = root.spks / nrow(sessions[[sid]]$spks[[tid]])
   }
   # add avg root spike count for trial
-  session.trial.summary$Avg.Root[i] = avg.root
+  session.trial.summary.root$Avg.Root[i] = avg.root
 }
 
-head(session.trial.summary)
+head(session.trial.summary.root)
 ```
 
-Now that I have added the average root spike count for each trial, I can remove the data with an NA in this column (Sessions 4 and 16), and then scale the data in the column. Once I have completed these pre-processing steps, I can then split the data into the training and testing sets.
+Now that I have added the average root spike count for each trial, I can remove the data with NAs in this column (Sessions 4 and 16), and then scale the data in the column. Once I have completed these pre-processing steps, I can then split the data into the training and testing sets.
 
 ```{r, echo=FALSE}
 # remove NAs
-session.trial.na <- session.trial.summary %>% na.omit()
+session.trial.root <- session.trial.summary.root %>% na.omit()
 
 # scale avg. root spikes column
-session.trial.na[,9] <- scale(session.trial.na[,9])
+session.trial.root[,9] <- scale(session.trial.root[,9])
 
 # split 70% into training and 30% into testing data sets
 set.seed(23)
-tot.samples = nrow(session.trial.na)
+tot.samples = nrow(session.trial.root)
 rand <- sample(1:tot.samples, size=0.7*tot.samples)
-train.data <- session.trial.na[rand,]
-test.data <- session.trial.na[-rand,]
+train.data.root <- session.trial.root[rand,]
+test.data.root <- session.trial.root[-rand,]
 
 # check
 print("Training Set:")
-head(train.data)
+head(train.data.root)
 print("Testing Set:")
-head(test.data)
+head(test.data.root)
 
 ```
 
-Next, I can re-build my models from above with the average root spikes variable as an additional predictor.
+Next, I can re-build my models from above with the average root spikes variable as an additional predictor and compare the accuracy rates to see if the average root spike count improves the models' ability to predict trial outcome.
 
 ## Linear Discriminant Analysis - With Average Root Spike Count
 
 ```{r, echo=FALSE}
-mod.root.lda <- lda(formula=Feedback ~. +Con.L:Con.R, data=train.data)
-mod.root.lda
+mod.root.lda <- lda(formula=Feedback ~., data=train.data.root)
+#mod.root.lda
 
-# predict
-predict.root.lda <- predict(mod.root.lda, test.data)
+# predict, acknowledgements 3
+predict.root.lda <- predict(mod.root.lda, test.data.root)
 
 # confusion matrix
-cm <- table(predict.root.lda$class, test.data$Feedback)
+cm <- table(predict.root.lda$class, test.data.root$Feedback)
 #cm
 
 # model metrics
@@ -908,24 +936,26 @@ acc = accuracy.rate(cm)
 me = misclass.rate(cm)
 f1 = F1(cm)
 print("LDA with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
-model.sum <- model.sum %>% add_row(Model="LDA, root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+# add to summary table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="LDA, with root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
 ```
+
+To accurately compare the addition of the `Avg.Root` predictor to the models, I have omitted the `Con.L:Con.R` interaction term from the LDA model. 
 
 ## Logistic Regression Model - With Average Root Spike Count
 
 ```{r, echo=FALSE}
-mod.root.logr <- glm(formula=Feedback~ . +Con.R:Con.L, family="binomial", data=train.data)
+mod.root.logr <- glm(formula=Feedback~ ., family="binomial", data=train.data.root)
 #summary(mod.root.logr)
 
-# predict
-predict.root.logr <- predict(mod.root.logr, newdata=test.data, type="response")
+# predict, acknowledgements 3
+predict.root.logr <- predict(mod.root.logr, newdata=test.data.root, type="response")
 predict.root.logr <- ifelse(predict.root.logr > 0.5, 1, 0)
 
 # confusion matrix
-cm <- table(predict.root.logr, test.data$Feedback)
+cm <- table(predict.root.logr, test.data.root$Feedback)
 #cm
 
 # model metrics
@@ -933,12 +963,15 @@ me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
 print("Logistic Regression, with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
+# add to summary table, acknowledgements 5
 model.sum <- model.sum %>% add_row(Model="Logistic Regression, with root", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 ```
+
+I also omitted the `Con.L:Con.R` interaction term from this logistic regression model including the `Avg.Root` as a predictor since I found that the interaction term did not help the model's accuracy in the earlier logistic regression model without the `Avg.Root` predictor. 
+
 ## kNN Model - With Average Root Spike Count
 
 I first used cross validation to determine the optimal value for k. To do this, I used the function I created before my previous kNN model using the training and testing sets that include the average root spike count. 
@@ -947,14 +980,15 @@ I first used cross validation to determine the optimal value for k. To do this, 
 #kNN with root
 
 # optimal k
-opt.k = optimal.knn.k(train.data, test.data)
+opt.k = optimal.knn.k(train.data.root, test.data.root)
 opt.k[[2]] # plot
-opt.k[[1]] # optimal k value
+cat("Optimal k:", opt.k[[1]]) # optimal k value
 
-mod.knn <- knn(train=train.data[-c(3,6)], test=test.data[-c(3,6)], cl=train.data$Feedback, k=opt.k[[1]])
+mod.root.knn <- knn(train=train.data.root[-c(3,6)], test=test.data.root[-c(3,6)], 
+               cl=train.data.root$Feedback, k=opt.k[[1]])
 
 # confusion matrix
-cm <- table(mod.knn, test.data$Feedback)
+cm <- table(mod.root.knn, test.data.root$Feedback)
 #cm
 
 # model metrics
@@ -962,29 +996,24 @@ me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
 print("kNN with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
+# add to summary table, acknowledgements 5
 model.sum <- model.sum %>% add_row(Model="kNN, with root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
 
-
-
-
 ```
-
-With the addition of the average root spike count, the LDA, Logistical Regression, and kNN models all experienced a slight increase in accuracy. Thus, the addition of the root spike count does appear to improve all three of these models' ability to correctly predict the outcome of a trial. Therefore, using the average root spike count as a predictor, I want to see whether a random forest model may improve the accuracy of the predictions.
 
 ## Random Forest Model - With Average Root Spike Count
 
 ```{r, echo=FALSE}
 
-rf.mod <- randomForest(Feedback ~. , data=train.data, importance=TRUE)
+rf.root.mod <- randomForest(Feedback ~. +Con.L*Con.R, data=train.data.root, importance=TRUE)
 
-# predict
-predict.rf <- predict(rf.mod, newdata=test.data, type="response")
+# predict, acknowledgements 3
+predict.rf <- predict(rf.root.mod, newdata=test.data.root, type="response")
 
 # confusion matrix
-cm <- table(predict.rf, test.data$Feedback)
+cm <- table(predict.rf, test.data.root$Feedback)
 #cm
 
 # model metrics
@@ -992,25 +1021,29 @@ me = misclass.rate(cm)
 acc = accuracy.rate(cm)
 f1 = F1(cm)
 print("Random Forest, with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary table
-model.sum <- model.sum %>% add_row(Model="Random Forest, with root", Accuracy=acc,
+# add to summary table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="Random Forest, with interaction and root", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 ```
+
+For the random forest model with `Avg.Root` as a predictor, I included the `Con.L*Con.R` interaction term since I included it for the earlier Random Forest model which did not consider the `Avg.Root` as a predictor. 
+
+One last model I want to consider is the decision tree model. However, since its approach is slightly similar to a Random Forest, which uses a collection of decision trees, I will only fit one model for it with the `Avg.Root` as added predictors. However, I could not use the interaction term `Con.L:Con.R` in this model so I omitted it. In doing this, I want to evaluate how much more effective the Random Forest algorithm is compared to a single Decision Tree algorithm in classifying the data accurately. 
 
 ## Decision Tree - With Average Root Spike Count
 
 ```{r, echo=FALSE}
 suppressWarnings(library(rpart))
 
-dtree.mod <- rpart(formula=Feedback~., data=train.data, method="class")
+dtree.mod <- rpart(formula=Feedback~., data=train.data.root, method="class")
 
-# predict
-predict.dtree <- predict(dtree.mod, newdata=test.data[-6], type="class")
+# predict, acknowledgements 3
+predict.dtree <- predict(dtree.mod, newdata=test.data.root[-6], type="class")
 
 # confusion matrix
-cm = table(predict.dtree, test.data$Feedback)
+cm = table(predict.dtree, test.data.root$Feedback)
 #cm
 
 # model metrics
@@ -1018,22 +1051,114 @@ acc = accuracy.rate(cm)
 me = misclass.rate(cm)
 f1 = F1(cm)
 print("Decision Tree with Root Spike:")
-cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+cat("Model Accuracy:", acc)
 
-# add to summary model table
-model.sum <- model.sum %>% add_row(Model="Decision Tree, with root", Accuracy=acc,
+# add to summary model table, acknowledgements 5
+model.sum <- model.sum %>% add_row(Model="Decision Tree, no interaction with root", Accuracy=acc,
                                    Misclassfication.Rate=me, F1.Score=f1)
 
 ```
 
+Now that I have fit various models, it is time to look at the summary table containing all the model metrics for each model and decide upon the best predictive model for this data set. 
 
-### Model Summary Table
+# Results
 
 ```{r, echo=FALSE}
+# acknowledgements 10
 knitr::kable(model.sum, digits=3)
 ```
 
-## Acknowledgements 
+Looking at this summary table, the Random Forest model with the interaction term `Con.L:Con.R` and without the `Avg.Root` included as a predictor appears to have the best performance based on its high accuracy rate, low misclassification rate, and greatest F-1 score out of all the fitted models. 
+
+The addition of the `Avg.Root` predictor appears to have slightly lowered the accuracy of the LDA model and slightly increased the accuracy of the Logistic Regression model. Perhaps this is due to the omission of data from sessions 4 and 16, which leads to less data being utilized in training the model and can explain the slight differences observed in accuracy. 
+
+In summary, the Random Forest model with interaction and no root is the optimal model for classifying the feedback trial of types. This model utilized `Session`, `Mouse`, `Trial`, `Con.L`, `Con.R`, the interaction term `Con.L:Con.R`, `Avg.Spikes`, and `Max.Spike` as predictors. Since the `Avg.Root` was omitted as a predictor, the data from all sessions was able to be used to train and test the model. 
+
+Next, I will evaluate this model against the test data sourced from Sessions 1 and 18. 
+
+## Evaluate Optimal Model Against Test Data
+
+```{r, echo=FALSE}
+# Load in test data
+setwd("~/College Semesters/Spring 2023/STA 141A/Project/") # set working directory
+
+test=list()
+
+for(i in 1:2){
+  test[[i]]=readRDS(paste('./Test/test',i,'.rds', sep=''))
+}
+
+# summarize into table 
+
+# get session, trial, mouse name, con_left, con_right, feedback, avg. active spikes for each trial across all test sessions
+
+test.summary <- tibble("Session"=as.numeric(), "Trial"=as.numeric(), "Mouse"=as.character(),
+                                "Con.L"=as.numeric(), "Con.R"=as.numeric(), "Feedback"=as.numeric(),
+                                "Avg.Spikes"=as.numeric(),"Max.Spike"=as.numeric())
+
+for(i in 1:2){
+  sid = i
+  n.trials = length(test[[sid]]$feedback_type)
+  mouse = test[[sid]]$mouse_name
+  
+  for(j in 1:n.trials){
+    tid = j
+    con.left = test[[sid]]$contrast_left[[tid]]
+    con.right = test[[sid]]$contrast_right[[tid]]
+    fb = test[[sid]]$feedback_type[[tid]]
+    spikes.nrows = nrow(test[[sid]]$spks[[tid]])
+    summed.spk.matrix = apply(test[[sid]]$spks[[tid]], 1, sum)
+    total.spks = sum(summed.spk.matrix)
+    avg.spks = total.spks / spikes.nrows
+    max.spk = summed.spk.matrix[which.max(summed.spk.matrix)] # acknowledgements 4
+
+    # add row, acknowledgements 5
+    test.summary <- test.summary %>% 
+      add_row(Session=sid, Trial=tid, Mouse=mouse, Con.L=con.left,Con.R=con.right, Feedback=fb, 
+              Avg.Spikes=avg.spks, Max.Spike=max.spk)
+  }
+}
+
+# feedback as factor with levels 0/1
+test.summary$Feedback <- ifelse(test.summary$Feedback==-1, 0, 1)
+test.summary$Feedback <- test.summary$Feedback %>% factor()
+
+# scale
+test.summary[,7:8] <- scale(test.summary[,7:8])
+
+# check
+head(test.summary)
+```
+
+After reading in the test data and extracting all of the relevant information needed for my optimal Random Forest with interaction, no root model, I can use the model to predict the trial outcome for these test trials.
+
+```{r, echo=FALSE}
+
+optimal.mod = rf.mod 
+
+# predict
+predict.test <- predict(optimal.mod, newdata=test.summary, type="response")
+
+# confusion matrix
+cm <- table(predict.test, test.summary$Feedback)
+cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+cat("Model Accuracy:", acc, "%\n")
+
+test.mod.metrics <- tibble("Accuracy"=acc, "Misclassification.Rate"=me, "F1.Score"=f1 )
+knitr::kable(test.mod.metrics, digits=3) # acknowledgements 10
+```
+
+The Random Forest, with interaction and no root model was fairly accurate in predicting the feedback type of each trial. The accuracy percentage means that for 73.5% of trials, the model correctly classified the feedback type of the trial. Consequently, the misclassification rate of 26.5% tells us that 26.5% of trials were classified as the incorrect feedback type. Lastly, the F-1 score represents a combination of precision and recall metrics. Thus, the higher the F-1 score, the higher the precision and recall of the model is. Once again, the precision represents the proportion of cases correctly classified as positive out of all cases classified as positive whereas the recall represents all correctly classified positive cases out of all actual positive cases. Thus, the higher the F-1 score, the better the model.
+
+From the confusion matrix, we can observe that the model seemed to have a more difficult time in classifying the unsuccessful trials as it predicted more of the actual unsuccessful trials as successful than it classified the actual successful trials as unsuccessful. This may be due to the fact that a many of the trials were actually successes. Therefore, the bias towards successful trials made it difficult to train the model to accurately predict the unsuccessful trials as there was less data for it to train these classifications off of. 
+
+
+# Acknowledgements 
 
 - Collaborated with Claire Hsieh, who is also in this class to help in brainstorming ideas and helping each other with some code errors throughout the project. 
 
@@ -1041,15 +1166,18 @@ knitr::kable(model.sum, digits=3)
 2. [Jitter Points in ggplot](https://ggplot2.tidyverse.org/reference/geom_jitter.html)
 3. [Predict Function in R](https://www.digitalocean.com/community/tutorials/predict-function-in-r)
 4. [Find Index of Max in Matrix](https://stackoverflow.com/questions/743622/finding-row-index-containing-maximum-value-using-r)
-5. [ggplot Colors](http://www.cookbook-r.com/Graphs/Colors_(ggplot2)/)
-6. [Add Row to Tibble](https://stackoverflow.com/questions/67531377/inserting-a-new-row-without-specifying-column-names-in-r-using-dplyr)
-7. [Fix Overlapping ggplot Labels](https://datavizpyr.com/how-to-dodge-overlapping-text-on-x-axis-labels-in-ggplot2/)
-8. [Sort Data Frame](https://www.statology.org/sort-dataframe-by-column-in-r/)
-9. [Add Column to Tibble](https://stackoverflow.com/questions/54693682/how-to-add-multiple-columns-to-a-tibble)
-10. [Random Forest](https://www.r-bloggers.com/2021/04/random-forest-in-r/)
-11. [Models Summary Table](https://bookdown.org/yihui/rmarkdown-cookbook/kable.html)
-12. [Table of Contents in R Markdown](https://bookdown.org/yihui/rmarkdown/html-document.html)
-13. [Choose Optimal k for kNN](https://medium.com/@moussadoumbia_90919/elbow-method-in-supervised-learning-optimal-k-value-99d425f229e7)
-14. [Return More than 1 Value in Function] (https://stackoverflow.com/questions/19622028/return-plot-from-r-function)
-15. Class Discussion week 8 materials for model metrics
+5. [Add Row to Tibble](https://stackoverflow.com/questions/67531377/inserting-a-new-row-without-specifying-column-names-in-r-using-dplyr)
+6. [Fix Overlapping ggplot Labels](https://datavizpyr.com/how-to-dodge-overlapping-text-on-x-axis-labels-in-ggplot2/)
+7. [Sort Data Frame](https://www.statology.org/sort-dataframe-by-column-in-r/)
+8. [Add Column to Tibble](https://stackoverflow.com/questions/54693682/how-to-add-multiple-columns-to-a-tibble)
+9. [Random Forest](https://www.r-bloggers.com/2021/04/random-forest-in-r/)
+10. [Models Summary Table](https://bookdown.org/yihui/rmarkdown-cookbook/kable.html)
+11. [Table of Contents in R Markdown](https://bookdown.org/yihui/rmarkdown/html-document.html)
+12. [Choose Optimal k for kNN](https://medium.com/@moussadoumbia_90919/elbow-method-in-supervised-learning-optimal-k-value-99d425f229e7)
+13. [Return More than 1 Value in Function] (https://stackoverflow.com/questions/19622028/return-plot-from-r-function)
+14. Class Discussion week 8 materials for model metrics
 
+# Code Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
