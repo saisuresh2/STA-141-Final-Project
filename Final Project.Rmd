@@ -1174,7 +1174,7 @@ From the confusion matrix, we can observe that the model seemed to have a more d
 10. [Models Summary Table](https://bookdown.org/yihui/rmarkdown-cookbook/kable.html)
 11. [Table of Contents in R Markdown](https://bookdown.org/yihui/rmarkdown/html-document.html)
 12. [Choose Optimal k for kNN](https://medium.com/@moussadoumbia_90919/elbow-method-in-supervised-learning-optimal-k-value-99d425f229e7)
-13. [Return More than 1 Value in Function] (https://stackoverflow.com/questions/19622028/return-plot-from-r-function)
+13. [Return More than 1 Value in Function](https://stackoverflow.com/questions/19622028/return-plot-from-r-function)
 14. Class Discussion week 8 materials for model metrics
 
 # Code Appendix
