@@ -1,0 +1,1055 @@
+---
+title: "Final Project"
+author: "Sai Suresh"
+date: "5/3/2023"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, echo=FALSE}
+suppressWarnings(library(tidyverse))
+suppressWarnings(library(knitr))
+```
+
+# Predicting Trial Outcome Using Neuronal Activity of Mice
+
+# Abstract
+
+In this project, we developed a model using the data from the Steinmetz et al. (2019) study to predict the trial outcome. Through exploration of the data set, we identified the `Trial`, `Mouse`, `Contrast Left` and `Contrast Right` interaction, `Average Spikes`, and `Average Root Spikes` to be the best predictors to use based on their apparent correlation with trial success (feedback = 1). Using these predictors and split-sample validation, we trained LDA, Logistic Regression, kNN, and Random Forest models to predict trial outcome. We evaluated these models based on three criteria: their accuracy rate misclassification rate, and F1 score. The accuracy rate represents the proportion of trials for which the model correctly predicted the feedback type. Conversely, the misclassfication rate is the proportion of trials for which the model incorrectly classified the feedback type. Lastly, the F1 score considers both false positives and false negatives to return a balanced evaluation of a model's classifications. By these three criteria, the best performing model was the Random Forest model, with an accuracy of about 75% and a F1 score of 0.84. 
+
+# Introduction
+
+In this project, we will look at the data from the Steinmetz et al. (2019) study. In this study, the researchers presented visual stimuli to 10 different mice in 39 different sessions and had the mice make a decision using a wheel they could control with their feet. 
+
+Based on the decision of the mouse, the researchers would provide either a reward or a penalty. The visual stimuli varied in terms of contrast levels (0, 0.25, 0.5, or 1) and direction (left or right). A successful trial is categorized by the mouse:
+
+  - Turning the wheel to the right when the left contrast > right contrast
+  - Turning the wheel to the left when the right contrast > left contrast
+  - Holding the wheel still when left contrast and right contrast are 0
+  - Random when left contrast = right contrast and non-zero
+  
+For each trial in each session, the feedback of the trial was recorded as a 1 if successful, and as -1 otherwise. Additionally, neuron activity of the mice was recorded in the form of spike trains, which captures a neuron firing at a certain time point in the 40 time bins recorded. If a neuron fired, a 1 in the respective time bin was recorded, and a 0 otherwise. 
+
+For this project, we will be focusing on session 1 to 18, which correspond to four mice: Cori, Frossman, Hence, and Lederberg. With this data, we will attempt to build a model that will be able to predict the outcome of a trial based on the available data. To accomplish this, we will first be exploring the data to find potential predictors and patterns within the sessions. Then, after identifying the variables we deem to be important, we will integrate the data across sessions and then develop and evaluate predictive models. 
+
+
+# Exploratory Data Analysis
+
+```{r, echo=FALSE}
+
+# Load in data
+sessions=list()
+
+for(i in 1:18){
+  sessions[[i]]=readRDS(paste('./Data/session',i,'.rds', sep=''))
+}
+```
+
+In order to get a better idea of the data set, I decided to make a table that summarizes information from each of the 18 sessions. I included the session number, mouse name, number of trials, number of neurons, the success rate, and the unique brain areas. I calculated the success rate by taking the average of the `feedback_type` variable across all the trials for each session, and then added 1 to account for the presence of -1s representing failures, and then dividing by 2 to get the correct rate of success. 
+
+```{r, echo=FALSE}
+
+data <- tibble(Session=as.numeric(), Mouse=as.character(), N.Trials=as.numeric(), N.Neurons=as.numeric(),
+               Success.Rate=as.numeric(), Brain.Areas=as.character())
+for (i in 1:18) {
+  
+  num_trials = length(sessions[[i]]$time)
+  num_neurons = nrow(sessions[[i]]$spks[[1]])
+  mouse_name = sessions[[i]]$mouse_name
+  success_rate = mean(sessions[[i]]$feedback_type + 1)/2
+  brain_areas = c(unique(sessions[[i]]$brain_area)) %>% toString()
+
+  # round success rate to 3 significant digits
+  success_rate = format(round(success_rate, digits=3)) %>% as.numeric()
+  
+  # add row
+  data <- data %>% add_row(Session=i, Mouse=mouse_name, N.Trials=num_trials, N.Neurons=num_neurons, 
+               Success.Rate=success_rate, Brain.Areas=brain_areas)
+}
+# check
+head(data)
+```
+
+I was interested in determining whether there was a relationship between the number of trials and the success rate for each mouse, so I decided to make a plot. I first grouped by the different mice, and then I summed the number of trials for each of them and averaged their success rates.   
+
+**Number of Trials and Success Rate**
+```{r, echo=FALSE}
+data %>% group_by(`Mouse`) %>%
+  summarize(tot_trials=sum(`N.Trials`),
+            avg_success=mean(`Success.Rate`)) %>%
+  ggplot(aes(fill=`Mouse`)) +
+  geom_col(mapping=aes(x=tot_trials, y=avg_success)) +
+  xlab("Total Number of Trials") +
+  ylab("Average Success Rate") +
+  ggtitle(label="Success Rate Per Mouse", subtitle="Figure 1")
+  
+```
+
+*Figure 1* suggests a correlation between the total number of trials and the average success rate. It appears that more trials correlates with a higher success rate. In fact, Lederberg had the most number of trials and the highest average success rate. 
+
+Next, I wanted to see the brain area breakdown for each mouse to see if there were any differences that potentially contributed to Lederberg's greater average success rate. To do this, I observed the total count of spikes for each of the different brain areas over all the trials in all sessions for each mouse. 
+
+**Brain Area Distribution for Each Mouse**
+
+```{r, fig.width=9, fig.height=8, echo=FALSE}
+
+# get total number of unique brain areas across all sessions
+brain.areas <- c()
+for (i in 1:18){
+  unique.areas <- unique(sessions[[i]]$brain_area)
+  for (j in 1:length(unique.areas)){
+    if (unique.areas[j] %in% brain.areas) {
+      next
+    }
+    else {
+      brain.areas <- append(unique.areas[j], brain.areas)
+    }
+  }
+}
+brain.areas <- sort(brain.areas) # sort alphabetically 
+
+# summed spike matrix for each session
+sum.session.spikes <- function(sid) {
+  n.trial = sessions[[sid]]$feedback_type %>% length() 
+   for(i in 1:n.trial) {
+     if (i == 1) {
+       session.spk.matrix = apply(sessions[[sid]]$spks[[1]], 1, sum)
+     }
+     else {
+       session.spk.matrix = session.spk.matrix + apply(sessions[[sid]]$spks[[i]], 1, sum)
+     }
+   }
+  return (session.spk.matrix)
+}
+
+
+# data frame with counts of spikes corresponding to each brain area for each session
+sessions.brain.areas.counts <- tibble("Session"=as.numeric(), "Mouse"=as.character(),"Brain.Area"=as.character(),
+                                      "Avg.Count"=as.numeric())
+for (i in 1:18){
+  session.id = i
+  mouse = sessions[[i]]$mouse_name
+  sum.spikes = sum.session.spikes(i)
+  for (j in 1:length(brain.areas)){
+    ba = brain.areas[j]
+    ba.index = which(sessions[[i]]$brain_area == ba)
+    count = sum.spikes[ba.index] %>% sum()
+    avg.count = count/length(sum.spikes)
+    sessions.brain.areas.counts <- sessions.brain.areas.counts %>% 
+      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Avg.Count=avg.count)
+  }
+}
+
+# plot brain areas counts across all sessions
+
+sessions.brain.areas.counts %>% ggplot() +
+  geom_col(mapping=aes(x=Brain.Area, y=Avg.Count, fill=factor(Brain.Area))) +
+  facet_wrap(facets=vars(Mouse)) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  scale_y_continuous(guide=guide_axis(n.dodge = 1)) +
+  coord_flip() +
+  ggtitle(label="Brain Area Distribution for Each Mouse", subtitle="Figure 2")
+```
+
+Based on *Figure 2* the `root` brain area seems to have the most spikes associated with it for Lederberg and Forssmann. Additionally, I do see a similar distribution in the majority of brain areas across all the mice. However, Ledenberg, who had the highest average success rate based on *Figure 1*, does seem to have a greater count of neuronal activity from the `LGd` brain area. Additionally, Cori, who had the lowest average success rate, has no neuronal activity corresponding to the `LGd` brain area. Lastly, Forssmann and Hench both have a similar average success rate and a similar number of counts for neuronal activity coming from the `LGd` brain area. 
+
+I would like to further investigate the success or failure of a trial could be partially attributable to the activity of a certain brain area. Although, prior to looking into this, I will first determine how many times each brain areas was observed in each session. Doing so will reveal the distribution of observed brain areas, allowing me to identify brain areas that are observed in a majority of sessions. Such brain areas could will help in connecting all the sessions together and their activity could also potentially be used as a predictor variable in the models. 
+
+**Brain Area Distribution for Each Session**
+
+To see how many neurons from each brain area were observed in all the sessions, I summed the neurons coming from each brain area in each session and then plotted the results. 
+
+```{r, echo=FALSE}
+
+sessions.brain.areas.obs <- tibble("Session"=as.numeric(), "Mouse"=as.character(),"Brain.Area"=as.character(),
+                                      "Count"=as.numeric())
+for (i in 1:18){
+  session.id = i
+  mouse = sessions[[i]]$mouse_name
+  for (j in 1:length(brain.areas)){
+    ba = brain.areas[j]
+    ba.index = which(sessions[[i]]$brain_area == ba)
+    count = ba.index %>% length() # how many spikes from each area observed
+    sessions.brain.areas.obs <- sessions.brain.areas.obs %>% 
+      add_row(Session=session.id, Mouse=mouse, Brain.Area=ba, Count=count)
+  }
+}
+
+
+sessions.brain.areas.obs %>% ggplot() +
+  geom_col(mapping=aes(x=Brain.Area, y=Count, fill=factor(Session))) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  scale_y_continuous(guide=guide_axis(n.dodge = 1)) +
+  coord_flip() +
+  ggtitle(label="Brain Area Distribution Across Sessions", subtitle="Figure 3")
+```
+
+As seen in the *Figure 3*, there are not many brain areas that appear to have been counted in a majority of the sessions. Therefore, the difference in counts associated with a particular brain area could be due to the fact that the researchers did not look at neurons from that area, which hinders my ability to connect brain area counts to trial outcome. Although, one brain area that did get a high number of counts in a majority of sessions was the `root` brain area, so perhaps this is a good brain area to focus on instead of the `LGd` brain area mentioned from *Figure 2*.
+
+I am interested in finding patterns that I can use to connect all the sessions together, therefore, I will not be investigating brain areas any further for the time being. Instead, based on *Figure 1*, I will select 4 sessions, one for each mouse, and investigate them to find other patterns in the data that I can then use to connect all the sessions. The sessions I will be focusing on for the next parts of the data exploration section are: *Sessions 2, 6, 9, and 17*.
+
+First, I am interested in investigating whether or not the trial number of each session is related to the feedback outcome of the trial. For instance, maybe the earlier trials have more successes than later trials because the mice are more focused in the beginning of the session. Or, perhaps the mice are more successful in later trials because they are better trained. To observe the presence of any such relationship between trial and feedback outcome, I will initialize a summary table for these four sessions and begin by getting the session, trial, and feedback values for each trial in all the four sessions.
+
+**Trial and Feedback Outcome**
+
+To determine whether there is an association between the trial number and the outcome, I made a boxplot for each of the four sessions, as shown below. 
+
+```{r, echo=FALSE}
+sessions.summary <- tibble("Session"=as.numeric(), "Trial"=as.numeric(), "Mouse"=as.character(), "Feedback"=as.numeric())
+
+for (i in c(2, 6, 9, 17)) {
+  mouse = sessions[[i]]$mouse_name
+  for (j in 1:nrow(sessions[[i]]$feedback_type)) {
+    fb = sessions[[i]]$feedback_type[j]
+
+    # add row to tibble
+    sessions.summary <- sessions.summary %>% add_row(Session=i, Trial=j, Mouse=mouse, `Feedback`=fb)
+  }
+}
+#head(sessions.summary)
+
+# plot trial and feedback
+sessions.summary %>% ggplot() +
+  geom_boxplot(aes(x=Trial, fill=factor(Feedback))) +
+  facet_wrap(facets=vars(Session)) +
+  ggtitle("Feedback Distribution Across Trials", subtitle="Figure 4")
+
+# get mean number of trials
+sessions.summary %>% group_by(Feedback) %>% summarize(Avg.Trials=mean(Trial))
+```
+
+Based on *Figure 4*, it appears that there are more successes in the earlier trials and more failures in the later trials. This supports my first hypothesis of the mice being more successful in earlier trials due to being more alert and focused. 
+
+Next, I am interested in determining whether there is an association between the `Contrast Left` and `Contrast Right` values and the feedback outcome of each trial.
+
+**Relationship Between Contrast Values and Feedback**
+
+To investigate this relationship, I will add the corresponding`Contrast Left` and `Contrast Right` values for each trial to my summary table. Then, I will graph the data and look for any patterns. 
+
+```{r, echo=FALSE}
+# add new columns
+sessions.summary$`Con.Left` <- rep(0,nrow(sessions.summary))
+sessions.summary$`Con.Right` <- rep(0, nrow(sessions.summary))
+
+
+for (i in 1:nrow(sessions.summary)){
+  s.i = sessions.summary[i,]$Session
+  t.i = sessions.summary[i,]$Trial
+  con.left = sessions[[s.i]]$contrast_left[[t.i]]
+  con.right = sessions[[s.i]]$contrast_right[[t.i]]
+  
+  # add to summary tibble
+  sessions.summary$Con.Left[i] <- con.left
+  sessions.summary$Con.Right[i] <- con.right
+}
+
+# plot
+sessions.summary %>% ggplot() + 
+  geom_point(aes(x=Con.Left, y=Con.Right, color=factor(Session)), position="jitter") +
+  facet_wrap(facets=vars(Feedback)) +
+  ggtitle("Contrast Values for Feedback Types", subtitle="Figure 5")
+```
+
+From *Figure 5*, we can see that there appear to be more successes when `Con.Left` is 1.0 and `Con.Right` is 0.0. Similarly, there are more successes when `Con.Left` is 0.0 and `Con.Right` is 1.0. Interestingly, there appears to be more unsuccessful trials along the diagonal, which corresponds to `Con.Left` and `Con.Right` values being identical. An exception to this is when `Con.Left` and `Con.Right` are both 0.0, as there appears to be more successes than failures attributed to trials in all sessions with these values. Based on these conclusions, I think an interaction term between `Con.Left` and `Con.Right` should be included in the predicted model. 
+
+Next, I am interested in looking at whether the number of active spikes and the success of a trial are related to each other. To investigate this, I will add the average active spike counts to the data table summarizing the four session and then visualize them in a graph.
+
+**Investigate Relationship Between Spike Counts and Trial Outcome**
+
+To observe the effects of average active spike count and trial outcome, I will create a new data table consisting of the session, trial, feedback, and average spikes and then plot them for each of the four sessions and see if there is any difference between the successful and unsuccessful trials. 
+
+```{r, echo=FALSE}
+sessions.summary$`Avg.Spikes` <- rep(0, times=nrow(sessions.summary))
+
+for (i in 1:nrow(sessions.summary)){
+  s.i = sessions.summary[i,]$Session
+  t.i = sessions.summary[i,]$Trial
+  avg.spks = sessions[[s.i]]$spks[[t.i]] %>% sum() / nrow(sessions[[s.i]]$spks[[t.i]])
+    
+  # add to tibble
+  sessions.summary$`Avg.Spikes`[i] = avg.spks
+}
+
+# plot average spikes
+sessions.summary %>% ggplot() +
+  geom_line(aes(x=Trial, y=`Avg.Spikes`, color=factor(Feedback)), linetype="dashed") +
+  geom_smooth(aes(x=Trial, y=`Avg.Spikes`, color=factor(Feedback)), method="lm") +
+  facet_wrap(facets=vars(Session)) +
+  ggtitle("Average Spikes per Feedback Outcome", subtitle="Figure 7")
+
+# get group means
+sessions.summary %>% group_by(Feedback) %>%
+  summarize(Avg.Spikes=mean(Avg.Spikes))
+```
+
+From *Figure 7*, we can observe that generally, successful trials (Feedback = 1) correlates with a greater value of average active spikes than in the unsuccessful trials (Feedback = -1). Thus, I think the average number of active spikes could be used as a predictor in a model as it appears to be associated with the outcome of a trial. 
+
+Now that I have found some predictors that connect all the sessions together, I will revisit my investigation of brain areas in these four sessions. I am interested in observing the activity of neurons over the trials from the various brain areas observed in these four sessions. 
+
+**Neuron Activity of Distinct Brain Areas Over Sessions**
+
+To see if there is a relationship between the neuronal activity from different brain areas and trial outcome in these four sessions, I will plot the average spikes data from the four sessions summary table in the context of their brain area. To do this, I will first find all the unique brain areas present in the four selected sessions and make those into new individual columns. Then, for each brain area, I will sum the respective spikes and average them against the total number of spikes observed to calculate the average spike count for each brain area in each trial for the four sessions.
+
+```{r, echo=FALSE}
+
+
+# find unique brain areas across all 4 sessions
+brain.areas = c()
+for (i in c(2, 6, 9, 17)) {
+  ba = sessions[[i]]$brain_area %>% unique() %>% as.vector()
+  for (area in ba){
+    brain.areas <- append(brain.areas, area)
+  }
+}
+brain.areas <- brain.areas %>% unique()
+print(" Observed Brain Areas:")
+brain.areas
+
+# add columns corresponding to the counts of average spikes for these areas
+sessions.summary[,brain.areas] = NA #(acknowledgements #14.)
+for (i in 1:nrow(sessions.summary)) {
+  s.i = sessions.summary[i,]$Session
+  t.i = sessions.summary[i,]$Trial
+  for (area in brain.areas) {
+    area.index = which(sessions[[s.i]]$brain_area==area)
+    area.count = sessions[[s.i]]$spks[[t.i]][which(sessions[[s.i]]$brain_area==area),] %>% sum()
+    avg.area.count = area.count / nrow(sessions[[s.i]]$spks[[t.i]])
+    sessions.summary[i,area] = avg.area.count
+  } 
+}
+
+# plot
+sessions.summary %>% pivot_longer(cols=c(CA1:MEA), names_to="brain.area", values_to="avg.spikes") %>%
+  ggplot() + 
+  geom_line(aes(x=Trial, y=avg.spikes, color=factor(brain.area)), linetype="dashed", alpha=0.4) + 
+  geom_smooth(aes(x=Trial, y=avg.spikes, color=factor(brain.area)),se=FALSE) +
+  facet_wrap(facets=vars(Session, Feedback)) +
+  ggtitle("Neural Activity per Brain Area Across Sessions and Feedback", subtitle="Figure 8")
+
+```
+
+As shown in *Figure 8*, I plotted the various brain areas and their respective average spike count for sessions 2, 6, 9, and 17 and also faceted by feedback to see if I could identify any patterns within and between sessions. One observation from this plot is that the positive feedback trials appear to have a more stable, or constant, distribution for the brain areas measured. For instance, when comparing the negative and positive feedback trials of Session 2, the VISpm curve is horizontal, and thus, more constant in the successful trials than in the unsuccessful trials.
+
+While the neuron activity over sessions within each brain area is interesting to observe, I do not think it is a good way to combine information over all sessions as it was determined earlier that the brain areas observed differed between sessions. Since different brain areas were observed in the sessions, some brain areas may not be able to be used when attempting to connect all sessions together. Therefore, to investigate the distribution of observed brain areas across all sessions, I summed I summed the number of spikes coming from each brain area across all trials for each session and then plotted the results.
+
+To better understand how the average number of spikes varies between the successful and unsuccessful trials in each of the four sessions, I summarized the average spikes per brain area in each session for each feedback outcome. 
+
+```{r, echo=FALSE}
+sessions.summary %>%
+  pivot_longer(cols=c(CA1:MEA), names_to="brain.area", values_to="avg.spikes") %>%
+  group_by(Session,Feedback, brain.area) %>%
+  summarize(mean=mean(avg.spikes)) %>%
+  pivot_wider(names_from=brain.area, values_from=mean) %>%
+  dplyr::select(Session:Feedback, root, everything())
+```
+
+From the table above, we can see that the only brain area we can really compare is the `root` brain area because it is present in all sessions. Looking at the root column, we can see that there is a slight increase in the average number of spikes corresponding to the `root` brain area in the successful trials. 
+
+```{r, echo=FALSE}
+sessions.summary %>%
+  pivot_longer(cols=c(CA1:MEA), names_to="brain.area", values_to="avg.spikes") %>%
+  group_by(Session,Feedback, brain.area) %>%
+  summarize(mean=mean(avg.spikes)) %>%
+  pivot_wider(names_from=brain.area, values_from=mean) %>%
+  dplyr::select(root) %>%
+  group_by(Feedback) %>%
+  summarize(Avg.Root=mean(root))
+```
+We can see that the average root spike counts do differ between the successful and unsuccessful trials. From *Figure 4* we learned that a majority of sessions do observe neurons form the root brain area. Here, I will check which sessions do not observe root neurons to get a better idea of the amount of data I will have to disregard if I build a model based on the average spike activity from the root brain area. 
+
+```{r, echo=FALSE}
+# which sessions do not record root brain area activity
+for (i in 1:18) {
+  if(!length(which(sessions[[i]]$brain_area=="root"))>0) {
+    cat("Session",i, "does not observe the root brain area.\n")
+  }
+}
+```
+
+```{r, echo=FALSE}
+s4.ba <- sessions[[4]]$brain_area %>% unique() %>% sort()
+s16.ba <- sessions[[16]]$brain_area %>% unique() %>% sort()
+cat("Session 4 observed brain areas:", s4.ba, "\n")
+cat("Session 16 observed brain areas:", s16.ba, "\n")
+```
+
+Although sessions 4 and 16 do not observe activity in the `root` brain area, they do both record activity of the "LGd" area, which looked interesting in *Figure 2*. So, I would like to see if the "LGd" brain area in sessions 4 and 16 are associated with the trial outcome. 
+
+```{r, echo=FALSE}
+# Session 4
+session.4 <- tibble("Trial" = as.numeric(), "Feedback"=as.numeric(), "Avg.LGd"=as.numeric())
+n.trial = sessions[[4]]$feedback_type %>% length()
+for (i in 1:n.trial) {
+  fb = sessions[[4]]$feedback_type[i]
+  summed.spks = apply(sessions[[4]]$spks[[i]], 1, sum)
+  lgd.index = which(sessions[[4]]$brain_area=="LGd")
+  lgd.counts = summed.spks[lgd.index] %>% sum()
+  avg.lgd = lgd.counts / sessions[[4]]$spks[[i]] %>% nrow()
+  
+  # add row
+  session.4 <- session.4 %>% add_row(Trial=i, Feedback=fb, Avg.LGd=avg.lgd)
+}
+head(session.4)
+
+# plot
+session.4 %>% ggplot() +
+  geom_line(aes(x=Trial, y=Avg.LGd, color=factor(Feedback)), linetype="dashed", alpha=0.5) +
+  geom_smooth(aes(x=Trial, y=Avg.LGd, color=factor(Feedback)), se=FALSE) +
+  ggtitle(label="Session 4 Average LGd Spike Count", subtitle="Figure 9")
+
+# group means
+session.4 %>% group_by(Feedback) %>%
+  summarize(Avg.LGd=mean(Avg.LGd))
+
+# Session 16
+session.16 <- tibble("Trial" = as.numeric(), "Feedback"=as.numeric(), "Avg.LGd"=as.numeric())
+n.trial = sessions[[16]]$feedback_type %>% length()
+for (i in 1:n.trial) {
+  fb = sessions[[16]]$feedback_type[i]
+  summed.spks = apply(sessions[[16]]$spks[[i]], 1, sum)
+  lgd.index = which(sessions[[16]]$brain_area=="LGd")
+  lgd.counts = summed.spks[lgd.index] %>% sum()
+  avg.lgd = lgd.counts / sessions[[16]]$spks[[i]] %>% nrow()
+  
+  # add row
+  session.16 <- session.16 %>% add_row(Trial=i, Feedback=fb, Avg.LGd=avg.lgd)
+}
+head(session.16)
+
+# plot
+session.16 %>% ggplot() +
+  geom_line(aes(x=Trial, y=Avg.LGd, color=factor(Feedback)), linetype="dashed", alpha=0.5) +
+  geom_smooth(aes(x=Trial, y=Avg.LGd, color=factor(Feedback)), se=FALSE) +
+  ggtitle(label="Session 16 Average LGd Spike Count", subtitle="Figure 10")
+
+# group means
+session.16 %>% group_by(Feedback) %>%
+  summarize(Avg.LGd=mean(Avg.LGd))
+```
+
+As can be seen from *Figure 9* and *Figure 10*, the Average LGd Spike Count is higher in the successful trials than in the unsuccessful trials. However, the difference is more pronounced in session 16 than in session 4. Therefore, I decided against swapping the average root spikes value with the average LGd spikes value for these two sessions. Instead, I developed models without the average root spike count (including sessions 4 and 16) and models with the average root spike count (excluding sessions 4 and 16) and compared their performances in the model section.  
+
+Despite my hesitancy in using brain areas in my model due to them not being equally measured across all sessions, I wanted to look into which brain area had the most spike counts associated with it in each trial. My reasoning for doing so was that perhaps a specific brain area in each session led to the success of a trial when highly active. Thus, I made a new column in the summary table which includes the brain area associated with the highest spike count. 
+
+**Most Active Brain Area**
+
+```{r, echo=FALSE}
+sessions.summary$`Most.Active.Area` <- rep("", times=nrow(sessions.summary))
+
+for (i in 1:nrow(sessions.summary)){
+  s.i = sessions.summary[i,]$Session
+  t.i = sessions.summary[i,]$Trial
+  
+  # sum spike matrix, find max spike and its associated brain area
+  summed.spks = apply(sessions[[s.i]]$spks[[t.i]], 1, sum)
+  max.spk.index = which.max(summed.spks)
+  ma.ba = sessions[[s.i]]$brain_area[max.spk.index]
+  
+  # add to tibble
+  sessions.summary$`Most.Active.Area`[i] = ma.ba
+}
+
+# reorder columns
+sessions.summary <- sessions.summary %>% dplyr::select(Session:`Avg.Spikes`, `Most.Active.Area`, everything())
+
+
+# plot
+sessions.summary %>% ggplot() + 
+  geom_bar(aes(x=`Most.Active.Area`, fill=factor(Session))) +
+  facet_wrap(facets=vars(Feedback)) +
+  coord_flip() +
+  ggtitle("Most Active Brain Area for Sessions", subtitle="Figure 11")
+```
+
+From *Figure 11*, there is not a clear, general pattern that can be applied to all four sessions; however, there is some insight gained. For instance,it appears that having `root` be the most active brain area in more trials is strongly associated with success in Session 6, and more weakly associated with success in Session 17. 
+
+Another observation is that in Session 17, successful trials have more counts of `VPM` being the most active brain area For Session 2, successful trials seem to have marginally more counts of `VISpm` and `VISI` being the most active brain areas. 
+
+Finally, successful trials in Session 9 appear to be associated with higher counts of `CA3` and `VPL` being the most active brain areas. 
+
+While these observed patterns are interesting, since the same brain areas are not observed across all sessions equally, it is difficult to use the most active brain area as a predictor for trial outcome. As mentioned above, when considering brain areas, I will focus only on the `root` brain area. 
+
+Pivoting away from the brain areas once again, I am interested in seeing if the maximum spike count associated with a single neuron shows a more clear association with trial outcome. For instance, perhaps having one highly active neuron is associated with trial success. Therefore, I will add another column consisting of the highest spike count for each trial and then plot it to observe any relationships. 
+
+**Association Between Maximum Spike Count and Trial Outcome**
+
+```{r, echo=FALSE}
+sessions.summary$`Max.Spike` <- rep(0, times=nrow(sessions.summary))
+
+for (i in 1:nrow(sessions.summary)){
+  s.i = sessions.summary[i,]$Session
+  t.i = sessions.summary[i,]$Trial
+  
+  # sum spike matrix, find max spike and its associated brain area
+  summed.spks = apply(sessions[[s.i]]$spks[[t.i]], 1, sum)
+  max.spk.index = which.max(summed.spks)
+  max.spk = summed.spks[max.spk.index]
+  
+  # add to tibble
+  sessions.summary$`Max.Spike`[i] = max.spk
+}
+
+# reorder columns
+sessions.summary <- sessions.summary %>% dplyr::select(Session:`Most.Active.Area`, `Max.Spike`, everything())
+
+# plot
+sessions.summary %>% ggplot() + 
+  geom_boxplot(aes(x=`Max.Spike`, color=factor(Feedback))) + 
+  facet_wrap(facets=vars(Session)) +
+  ggtitle("Maximum Spike Count and Feedback Type", subtitle="Figure 12")
+
+sessions.summary %>% group_by(Feedback) %>%
+  summarize(Avg.Max.Spike=mean(`Max.Spike`))
+```
+
+*Figure 12* shows the maximum spike count distribution appears to be nearly identical between the successful and unsuccessful trials This suggests that the high activity of a single neuron is not strongly associated with the trial outcome. Despite the maximum spike count not appearing to be a strong predictor, since there is a difference present between the successful and unsuccessful trials, I decided to use the maximum spike count as a predictor in my models.
+
+Based on the various plots in this data exploration section, I will next compile the relevant variables across all sessions and trials in the Data Integration section. To recap, from my results, I anticipate that the `Mouse`, `Contrast Left`, `Contrast Right`, `Average Number of Spikes`, `Trial`, and `Maximum Spike Count` will serve as good predictors for trial outcome based on the patterns I have observed above across all sessions. 
+
+I will also add the `Average Root Spike Count` as a predictor in some models and compare between those that utilize this predictor and those that do not as this variable will force me to disregard some data and I want to be sure that doing so improves my model's ability to accurately predict the trial outcomes. 
+
+# Data Integration
+
+## Gather Relevant Information Across All Sessions and Trials 
+
+Now that I have found the variables I believe to be important in predicting trial outcome, I will create a new data table consisting of these relevant variables across all trials in all sessions. For the first models, I will not integrate the average spike count from the `root` brain area.
+
+```{r, echo=FALSE}
+
+# get session, trial, mouse name, con_left, con_right, feedback, avg. active spikes for each trial across all sessions
+
+session.trial.summary <- tibble("Session"=as.numeric(), "Trial"=as.numeric(), "Mouse"=as.character(),
+                                "Con.L"=as.numeric(), "Con.R"=as.numeric(), "Feedback"=as.numeric(),
+                                "Avg.Spikes"=as.numeric(),"Max.Spike"=as.numeric())
+
+for(i in 1:18){
+  sid = i
+  n.trials = length(sessions[[sid]]$feedback_type)
+  mouse = sessions[[sid]]$mouse_name
+  
+  for(j in 1:n.trials){
+    tid = j
+    con.left = sessions[[sid]]$contrast_left[[tid]]
+    con.right = sessions[[sid]]$contrast_right[[tid]]
+    fb = sessions[[sid]]$feedback_type[[tid]]
+    spikes.nrows = nrow(sessions[[sid]]$spks[[tid]])
+    summed.spk.matrix = apply(sessions[[sid]]$spks[[tid]], 1, sum)
+    total.spks = sum(summed.spk.matrix)
+    avg.spks = total.spks / spikes.nrows
+    max.spk = summed.spk.matrix[which.max(summed.spk.matrix)]
+
+    # add row 
+    session.trial.summary <- session.trial.summary %>% 
+      add_row(Session=sid, Trial=tid, Mouse=mouse, Con.L=con.left,Con.R=con.right, Feedback=fb, 
+              Avg.Spikes=avg.spks, Max.Spike=max.spk)
+  }
+}
+
+# check
+head(session.trial.summary)
+```
+
+
+## Split-Sample Preparation
+
+I will split my integrated data set into a training and testing set so that I can build and evaluate the performance of my prediction models later. Before splitting my data, I first changed the `Feedback` column into a factor with levels 0 and 1, for unsuccessful and successful trials, respectively. Then, I also scaled my data so that it is normalized. 
+
+```{r, echo=FALSE}
+# feedback as factor with levels 0/1
+session.trial.summary$Feedback <- ifelse(session.trial.summary$Feedback==-1, 0, 1)
+session.trial.summary$Feedback <- session.trial.summary$Feedback %>% factor()
+
+
+# scale avg. spikes and max. spikes columns
+session.trial.summary[,7:8] <- scale(session.trial.summary[,7:8])
+
+# split 70% into training and 30% into testing data sets
+set.seed(23)
+tot.samples = nrow(session.trial.summary)
+rand <- sample(1:tot.samples, size=0.7*tot.samples)
+train.data <- session.trial.summary[rand,]
+test.data <- session.trial.summary[-rand,]
+
+# check
+print("Training Set:")
+head(train.data)
+print("Testing Set:")
+head(test.data)
+```
+
+Now that my data has been integrated across all sessions and trials, I will begin building and evaluating models based on their ability to accurately predict the trial outcomes. Before I do this, I will first define a benchmark model against which I can compare my other models against to ensure they have improved their accuracy in making trial outcome predictions. However, before I can begin building any models, I need to determine the criteria by which I will be evaluating their performance. 
+
+## Model Metrics
+
+The metrics I will use to evaluate the performance of my model are:
+
+1. Accuracy Rate: the percentage of trials in which the model correctly predicts the feedback type of the trial
+2. Misclassification Rate: the percentage of trials in which the model incorrectly classifies a trial's outcome.
+3. F-1 Score: considers the false positives and false negatives by combining the precision and recall rates 
+  - Precision: the proportion of cases correctly classified as positive out of all cases predicted as positive
+  - Recall: the proportion of cases correctly classified as positive out of all actual positive cases
+    
+
+```{r, echo=FALSE}
+# code adapted from acknowledgements 15
+
+# accuracy rate
+accuracy.rate <- function(confusion.matrix){
+  correct = confusion.matrix["0","0"] + confusion.matrix["1","1"] # sum correctly classified
+  acc = (correct / sum(confusion.matrix)) * 100 # divide by total
+  return(acc)
+}
+
+# misclassification rate
+misclass.rate <- function(confusion.matrix){
+  incorrect = confusion.matrix["0","1"] + confusion.matrix["1","0"] # sum misclassified
+  me = (incorrect / sum(confusion.matrix)) * 100 # divide by total
+  return(me)
+}
+
+F1 <- function(confusion.matrix){
+  # precision
+  true.pos = sum(confusion.matrix["1", "1"])
+  tot.pos = sum(confusion.matrix["1",])
+  precision = true.pos / tot.pos
+  
+  # recall
+  true.pos = sum(confusion.matrix["1","1"])
+  act.pos = sum(confusion.matrix[,"1"])
+  recall = true.pos / act.pos
+  
+  f1 = 2 * precision * recall / (precision + recall) 
+  
+  return(f1)
+}
+```
+
+```{r, echo=FALSE}
+# Summary of Models and Metrics
+model.sum <- tibble("Model"=as.character(), "Accuracy"=as.numeric(), "Misclassfication.Rate"=as.numeric(), "F1.Score"=as.numeric())
+
+```
+
+## Benchmark Models
+
+For the benchmark models, I will only be using only the trial number as a predictor as this was a variable given to us in the data set.  
+
+### Benchmark - LDA
+
+```{r, echo=FALSE}
+suppressWarnings(library(MASS))
+
+benchmark.lda <- lda(formula=Feedback ~ Trial, data=train.data)
+
+# predict
+bm.predict.lda <- predict(benchmark.lda, test.data, type="response")
+
+# confusion matrix
+cm <- table(bm.predict.lda$class, test.data$Feedback)
+#cm
+
+# model metrics
+acc = accuracy.rate(cm)
+me = misclass.rate(cm)
+f1 = F1(cm)
+print("Benchmark LDA:")
+cat("Accuracy:", acc, "Misclassification Rate:", me)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Benchmark LDA", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+```
+
+### Benchmark Random Forest
+
+```{r, echo=FALSE}
+suppressWarnings(library(randomForest))
+
+bm.rf <- randomForest(Feedback ~ Trial , data=train.data, importance=TRUE)
+
+# predict
+bm.predict.rf <- predict(bm.rf, newdata=test.data, type="response")
+
+# confusion matrix
+cm <- table(bm.predict.rf, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("Benchmark Random Forest:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Benchmark Random Forest", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+```
+
+With the benchmark models defined, I can create models with additional predictors, evaluate their performance, and compare them to the benchmark model. The first model I tried to fit to the data was a Linear Discriminant Analysis model.
+
+## Linear Discriminant Analysis Model - Without Average Root Spike Count
+
+```{r, echo=FALSE}
+
+# train model
+mod.lda <- lda(formula=Feedback ~. +Con.L:Con.R, data=train.data)
+#mod.lda
+
+# predict
+predict.lda <- predict(mod.lda, test.data)
+
+# confusion matrix
+cm <- table(predict.lda$class, test.data$Feedback) # confusion matrix
+#cm
+
+# misclassification and accuracy rates
+acc = accuracy.rate(cm)
+me = misclass.rate(cm)
+f1 = F1(cm)
+print("LDA without Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="LDA, no root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+```
+
+In the LDA model above, I used the `Mouse`, `Trial`, `Avg.Spikes`, and the interaction term `Contrast Left`:`Contrast Right` in my model based on the visualizations comparing these values between the successful and unsuccessful trials above. 
+
+Next, I want to see if a logistical regression model may produce a more accurate model, so I will fit and evaluate one next.
+
+## Logistic Regression Model - Without Average Root Spike Count
+
+```{r, echo=FALSE}
+# train model
+mod.logr <- glm(formula=Feedback~ . +Con.R:Con.L, family="binomial", data=train.data)
+#summary(mod.logr)
+
+# predict
+predict.logr <- predict(mod.logr, newdata=test.data, type="response")
+predict.logr <- ifelse(predict.logr > 0.5, 1, 0)
+
+# confusion matrix
+cm <- table(predict.logr, test.data$Feedback)
+#cm
+
+# misclassification and accuracy rates
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("Logistic Regression without Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Logistic Regression, no root", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+```
+
+I built a logistical regression model using `Mouse`, `Trial`, `Avg.Spikes`, and the interaction term `Contrast Left`:`Contrast Right` as the predictors. 
+
+This model has an accuracy a misclassification rate of very similar to that of the LDA model. Next, I want to try a k Nearest Neighbors (kNN) classification model to see if this is better at predicting the trial outcome.
+
+## kNN Model - Without Average Root Spike Count
+
+Before fitting my kNN model, I first found the optimal k. Since I will use this later in a different kNN model, I will wrap the code into a function.
+
+```{r, echo=FALSE}
+suppressWarnings(library(class))
+# find optimal k
+optimal.knn.k <- function(train.data, test.data){
+  mes = c()
+  for (i in 1:60){
+    mod.knn <- knn(train=train.data[-c(3,6)], test=test.data[-c(3,6)], cl=train.data$Feedback, k=i)
+    cm = table(mod.knn, test.data$Feedback)
+    me = misclass.rate(cm)
+    mes = append(mes, me)
+  }
+  pl = ggplot() + 
+    geom_line(aes(x=1:60, y=mes))+
+    xlab("k") + ylab("Misclassification Rate") +
+    ggtitle("Misclassification Rate for Various Values of k")
+  
+  opt.k = which.min(mes)
+  return(list(opt.k, pl))
+}
+```
+
+
+```{r, echo=FALSE}
+
+# get plot optimal k test and get optimal k
+opt.k = optimal.knn.k(train.data, test.data)
+opt.k[[2]] # plot
+opt.k[[1]] # optimal k value
+
+mod.knn <- knn(train=train.data[-c(3,6)], test=test.data[-c(3,6)], cl=train.data$Feedback, k=opt.k[[1]])
+
+# confusion matrix
+cm <- table(mod.knn, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("kNN without Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="kNN, no root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+
+```
+
+## Random Forest Without Average Root Spike Count
+
+```{r}
+
+rf.mod <- randomForest(Feedback ~. +Con.L:Con.R, data=train.data, importance=TRUE)
+
+# predict
+predict.rf <- predict(rf.mod, newdata=test.data, type="response")
+
+# confusion matrix
+cm <- table(predict.rf, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("Random Forest, with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Random Forest, without root", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+```
+
+
+Since the above three models produce predictions with similar accuracy rates, I wanted to try adding another predictor. The predictor I thought may help improve my model's accuracy is the average count of spikes coming from the `root` brain area as I observed this was a brain area observed in all sessions, excluding sessions 4 and 16, and that there was a slight difference between the negative and positive feedback types in the four summary sessions I focused on in the data exploration section. 
+
+Therefore, I will add a column to my `session.trial.summary` data table which corresponds to the average spike count from the `root` brain area from each trial. Then, I will remove the NAs that will arise from sessions 4 and 16 and scale the data, split it into the training and testing sets, and then refit and evaluate the resulting models.
+
+```{r, echo=FALSE}
+
+# function to sum trial spikes
+summed.trial.spks <- function(sid, tid) {
+  summed.spks = apply(sessions[[sid]]$spks[[tid]], 1, sum)
+  return(summed.spks)
+}
+
+# add column
+session.trial.summary$Avg.Root <- rep(0, nrow(session.trial.summary))
+
+for(i in 1:nrow(session.trial.summary)){
+  sid = session.trial.summary[i,]$Session
+  tid = session.trial.summary[i,]$Trial
+  root.index = which(sessions[[sid]]$brain_area == "root")
+  if(length(root.index) == 0) {
+    avg.root = NA
+  }
+  else {
+  root.spks = summed.trial.spks(sid, tid)[root.index] %>% sum()
+  avg.root = root.spks / nrow(sessions[[sid]]$spks[[tid]])
+  }
+  # add avg root spike count for trial
+  session.trial.summary$Avg.Root[i] = avg.root
+}
+
+head(session.trial.summary)
+```
+
+Now that I have added the average root spike count for each trial, I can remove the data with an NA in this column (Sessions 4 and 16), and then scale the data in the column. Once I have completed these pre-processing steps, I can then split the data into the training and testing sets.
+
+```{r, echo=FALSE}
+# remove NAs
+session.trial.na <- session.trial.summary %>% na.omit()
+
+# scale avg. root spikes column
+session.trial.na[,9] <- scale(session.trial.na[,9])
+
+# split 70% into training and 30% into testing data sets
+set.seed(23)
+tot.samples = nrow(session.trial.na)
+rand <- sample(1:tot.samples, size=0.7*tot.samples)
+train.data <- session.trial.na[rand,]
+test.data <- session.trial.na[-rand,]
+
+# check
+print("Training Set:")
+head(train.data)
+print("Testing Set:")
+head(test.data)
+
+```
+
+Next, I can re-build my models from above with the average root spikes variable as an additional predictor.
+
+## Linear Discriminant Analysis - With Average Root Spike Count
+
+```{r, echo=FALSE}
+mod.root.lda <- lda(formula=Feedback ~. +Con.L:Con.R, data=train.data)
+mod.root.lda
+
+# predict
+predict.root.lda <- predict(mod.root.lda, test.data)
+
+# confusion matrix
+cm <- table(predict.root.lda$class, test.data$Feedback)
+#cm
+
+# model metrics
+acc = accuracy.rate(cm)
+me = misclass.rate(cm)
+f1 = F1(cm)
+print("LDA with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="LDA, root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+```
+
+## Logistic Regression Model - With Average Root Spike Count
+
+```{r, echo=FALSE}
+mod.root.logr <- glm(formula=Feedback~ . +Con.R:Con.L, family="binomial", data=train.data)
+#summary(mod.root.logr)
+
+# predict
+predict.root.logr <- predict(mod.root.logr, newdata=test.data, type="response")
+predict.root.logr <- ifelse(predict.root.logr > 0.5, 1, 0)
+
+# confusion matrix
+cm <- table(predict.root.logr, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("Logistic Regression, with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Logistic Regression, with root", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+```
+## kNN Model - With Average Root Spike Count
+
+I first used cross validation to determine the optimal value for k. To do this, I used the function I created before my previous kNN model using the training and testing sets that include the average root spike count. 
+
+```{r, echo=FALSE}
+#kNN with root
+
+# optimal k
+opt.k = optimal.knn.k(train.data, test.data)
+opt.k[[2]] # plot
+opt.k[[1]] # optimal k value
+
+mod.knn <- knn(train=train.data[-c(3,6)], test=test.data[-c(3,6)], cl=train.data$Feedback, k=opt.k[[1]])
+
+# confusion matrix
+cm <- table(mod.knn, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("kNN with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="kNN, with root", Accuracy=acc, Misclassfication.Rate=me, F1.Score=f1)
+
+
+
+
+```
+
+With the addition of the average root spike count, the LDA, Logistical Regression, and kNN models all experienced a slight increase in accuracy. Thus, the addition of the root spike count does appear to improve all three of these models' ability to correctly predict the outcome of a trial. Therefore, using the average root spike count as a predictor, I want to see whether a random forest model may improve the accuracy of the predictions.
+
+## Random Forest Model - With Average Root Spike Count
+
+```{r, echo=FALSE}
+
+rf.mod <- randomForest(Feedback ~. , data=train.data, importance=TRUE)
+
+# predict
+predict.rf <- predict(rf.mod, newdata=test.data, type="response")
+
+# confusion matrix
+cm <- table(predict.rf, test.data$Feedback)
+#cm
+
+# model metrics
+me = misclass.rate(cm)
+acc = accuracy.rate(cm)
+f1 = F1(cm)
+print("Random Forest, with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary table
+model.sum <- model.sum %>% add_row(Model="Random Forest, with root", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+```
+
+## Decision Tree - With Average Root Spike Count
+
+```{r, echo=FALSE}
+suppressWarnings(library(rpart))
+
+dtree.mod <- rpart(formula=Feedback~., data=train.data, method="class")
+
+# predict
+predict.dtree <- predict(dtree.mod, newdata=test.data[-6], type="class")
+
+# confusion matrix
+cm = table(predict.dtree, test.data$Feedback)
+#cm
+
+# model metrics
+acc = accuracy.rate(cm)
+me = misclass.rate(cm)
+f1 = F1(cm)
+print("Decision Tree with Root Spike:")
+cat("Misclassification Rate:", me, "Model Accuracy:", acc)
+
+# add to summary model table
+model.sum <- model.sum %>% add_row(Model="Decision Tree, with root", Accuracy=acc,
+                                   Misclassfication.Rate=me, F1.Score=f1)
+
+```
+
+
+### Model Summary Table
+
+```{r, echo=FALSE}
+knitr::kable(model.sum, digits=3)
+```
+
+## Acknowledgements 
+
+- Collaborated with Claire Hsieh, who is also in this class to help in brainstorming ideas and helping each other with some code errors throughout the project. 
+
+1. [LDA](https://rpubs.com/pranaugi011089/98288)
+2. [Jitter Points in ggplot](https://ggplot2.tidyverse.org/reference/geom_jitter.html)
+3. [Predict Function in R](https://www.digitalocean.com/community/tutorials/predict-function-in-r)
+4. [Find Index of Max in Matrix](https://stackoverflow.com/questions/743622/finding-row-index-containing-maximum-value-using-r)
+5. [ggplot Colors](http://www.cookbook-r.com/Graphs/Colors_(ggplot2)/)
+6. [Add Row to Tibble](https://stackoverflow.com/questions/67531377/inserting-a-new-row-without-specifying-column-names-in-r-using-dplyr)
+7. [Fix Overlapping ggplot Labels](https://datavizpyr.com/how-to-dodge-overlapping-text-on-x-axis-labels-in-ggplot2/)
+8. [Sort Data Frame](https://www.statology.org/sort-dataframe-by-column-in-r/)
+9. [Add Column to Tibble](https://stackoverflow.com/questions/54693682/how-to-add-multiple-columns-to-a-tibble)
+10. [Random Forest](https://www.r-bloggers.com/2021/04/random-forest-in-r/)
+11. [Models Summary Table](https://bookdown.org/yihui/rmarkdown-cookbook/kable.html)
+12. [Table of Contents in R Markdown](https://bookdown.org/yihui/rmarkdown/html-document.html)
+13. [Choose Optimal k for kNN](https://medium.com/@moussadoumbia_90919/elbow-method-in-supervised-learning-optimal-k-value-99d425f229e7)
+14. [Return More than 1 Value in Function] (https://stackoverflow.com/questions/19622028/return-plot-from-r-function)
+15. Class Discussion week 8 materials for model metrics
+
