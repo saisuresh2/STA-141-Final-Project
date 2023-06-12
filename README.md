@@ -6,4 +6,4 @@ Based on the mouse's decision, the trial was categorized as a failure (feedback 
 
 To successfully run the code in the .Rmd file provided, make sure to download the `sessions.zip` and `test.zip` files containing the data from the study, unzip them to the location of your choice, and then update the working directory to your path to these files when loading in the sessions and test data. 
 
-The sessions data is loaded in at the beginning of the **Exploratory Data Analysis** section whereas the test data is loaded in at the **Evaluate Optimal Model Against Test Data** section.
+The sessions data is loaded in at the beginning of the **Exploratory Data Analysis** section (line 43) whereas the test data is loaded in at the **Evaluate Optimal Model Against Test Data** section (line 1083).
